@@ -1,5 +1,5 @@
 ---
-title: "Trabalho ME415"
+title: "trabalho me415"
 author: "Arthur Lourenço 236043"
 date: "`r Sys.Date()`"
 output:
@@ -10,107 +10,177 @@ output:
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
-
 ```{r}
 library(ggplot2)
-library(dplyr)
+library(tidyverse)
+library(car)
 ```
 
-```{r}
-#Vetores com dados
-sal_24 <- c(55.27, 43.03, 59.45, 29.98, 58.61)
-sal_40 <- c(23.01, 23.89, 21.42, 21.88, 51.89) #Outlier
-sal_60 <- c(11.96, 25.00, 15.21, 22.70, 22.37)
 
-acucar_24 <- c(46.52, 42.87, 38.73, 39.56, 45.77)
-acucar_40 <- c(26.09, 19.05, 18.54, 16.13, 22.73)
-acucar_60 <- c(14.23, 12.10, 12.27, 15.02, 11.50)
+A pergunta que a ANOVA vai responder é:
+
+1.  **Efeito Principal de `tipo_soluto`:** O tempo de dissolução é diferente entre sal e açúcar, em média? (Provavelmente).
+2.  **Efeito Principal de `temperatura`:** O tempo de dissolução é diferente entre as temperaturas, em média? (Quase certeza).
+3.  **Efeito de Interação `tipo_soluto:temperatura`:** **Esta é a sua pergunta-chave.** A forma como a temperatura afeta o tempo de dissolução *depende* do soluto? Ou seja, o fato do sal ser iônico faz com que ele reaja à mudança de temperatura de forma *diferente* do açúcar (molecular)?
+```{r}
+df <- data.frame(
+  # Coluna do tempo de dissolução (sua variável de resposta)
+  tempo = c(
+    # Dados do SAL
+    55.27, 43.03, 59.45, 29.98, 58.61,  # Sal @ 24
+    23.01, 23.89, 21.42, 21.88, 51.89,  # Sal @ 40
+    11.96, 25.00, 15.21, 22.70, 22.37,  # Sal @ 60
+    # Dados do AÇÚCAR
+    46.52, 42.87, 38.73, 39.56, 45.77,  # Açúcar @ 24
+    26.09, 19.05, 18.54, 16.13, 22.73,  # Açúcar @ 40
+    14.23, 12.10, 12.27, 15.02, 11.50   # Açúcar @ 60
+  ),
+  
+  # Coluna do Fator 1: Tipo de Soluto
+  tipo_soluto = rep(c("SAL", "AÇUCAR"), each = 15),
+  
+  # Coluna do Fator 2: Temperatura
+  temperatura = rep(c(24, 40, 60), each = 5, times = 2)
+)
+
+# Converter os fatores para fatores
+df$tipo_soluto <- as.factor(df$tipo_soluto)
+df$temperatura <- as.factor(df$temperatura)
+str(df)
 ```
 
+Análise Exploratória
 ```{r}
-#Combinando os tempos em uma única coluna
-tempo <- c(sal_24, sal_40, sal_60, acucar_24, acucar_40, acucar_60)
-
-# Vetor coluna de fator para a Temperatura
-
-temperatura <- factor(rep(c(24, 40, 60), each = 5, times = 2))
-
-# Vetor coluna de fator para o Soluto
-soluto <- factor(rep(c("SAL", "AÇÚCAR"), each = 15))
-
-# Data Frame
-dados <- data.frame(soluto, temperatura, tempo)
-dados
-```
-
-```{r}
-dados_resumo <- dados %>%
-  group_by(soluto, temperatura) %>%
+combinada <- df %>% 
+  group_by(tipo_soluto, temperatura) %>% 
   summarise(
-    n = n(),                           
-    media = mean(tempo),               
-    desvio_padrao = sd(tempo)       
-  ) %>%
-  mutate(
-    erro_padrao = desvio_padrao / sqrt(n),
-    ic_95 = erro_padrao * 1.96 
-  )
+    n = n(),
+    Media = mean(tempo),
+    Mediana = median(tempo),
+    DP = sd(tempo),
+    EP = sd(tempo)/sqrt(n()),
+    Minimo = min(tempo),
+    Maximo = max(tempo),
+    .groups = 'drop'
+  ) %>% 
+  arrange(tipo_soluto, temperatura)
+print(combinada)
+
+
 ```
 
 ```{r}
-ggplot(dados_resumo, aes(x = temperatura, y = media, fill = temperatura)) +
-  geom_bar(stat = "identity", color = "black") +
-  
-  facet_wrap(~ soluto) +
-  
-  labs(
-    title = "Média de Tempo de Dissolução",
-    x = "Temperatura (°C)",
-    y = "Tempo Médio (s)"
-  ) +
-  theme_bw()
+# Boxplot com ggplot2
+ggplot(df, aes(x = temperatura, y = tempo, fill = tipo_soluto)) +
+  geom_boxplot() +
+  facet_wrap(~ tipo_soluto) + # Separa os gráficos para Sal e Açúcar
+  labs(title = "Tempo de Dissolução por Soluto e Temperatura",
+       x = "Temperatura (°C)",
+       y = "Tempo de Dissolução (s)",
+       fill = "Tipo de Soluto") + theme_bw()
 ```
+Visualmente, é notável, se as medianas caem com a temperatura e se a "velocidade" dessa queda parece diferente entre SAL e AÇÚCAR.
+
+Teste ANOVA de Duas Vias
+
+Agora, o evento principal. Vamos rodar o modelo de Análise de Variância.
+
+A fórmula `tempo ~ tipo_soluto * temperatura` é um atalho para:
+`tempo ~ tipo_soluto + temperatura + tipo_soluto:temperatura` (Efeito 1 + Efeito 2 + Interação).
 
 ```{r}
-# Filtrar Sal
-dados_sal <- subset(dados, soluto == "SAL")
-
-# ANOVA
-modelo_sal <- aov(tempo ~ temperatura, data = dados_sal)
-summary(modelo_sal)
+modelo_anova <- aov(tempo ~ tipo_soluto * temperatura, data = df)
+summary(modelo_anova)
 ```
+
+Assumindo um nível de significância de 0.05:
+
+  * **`Pr(>F)` para `tipo_soluto` (p1):** Se `p1 < 0.05`, há uma diferença estatisticamente significativa no tempo de dissolução entre Sal e Açúcar, no geral.
+  * **`Pr(>F)` para `temperatura` (p2):** Se `p2 < 0.05`, a temperatura tem um efeito significativo no tempo de dissolução, no geral.
+  * **`Pr(>F)` para `tipo_soluto:temperatura` (p3):** **Este é o seu teste "iônico vs. molecular".** Se `p3 < 0.05`, significa que o efeito da temperatura **NÃO É** o mesmo para o sal e para o açúcar. Há uma **interação** significativa.
+
+Se a interação (p3) for significativa, os "efeitos principais" (p1 e p2) perdem um pouco a importância. O resultado principal é a própria interação.
+
+Verificando as Premissas 
+
+A ANOVA só é válida se algumas premissas forem atendidas (principalmente normalidade dos resíduos e homogeneidade das variâncias).
 
 ```{r}
-# Filtrar Açucar
-dados_acucar <- subset(dados, soluto == "AÇÚCAR")
+# Normalidade dos Resíduos (Teste de Shapiro-Wilk)
+# H0: Os dados são normalmente distribuídos. 
+# Queremos p > 0.05
+shapiro.test(residuals(modelo_anova))
 
-# ANOVA
-modelo_acucar <- aov(tempo ~ temperatura, data = dados_acucar)
-summary(modelo_acucar)
+# Homogeneidade das Variâncias (Teste de Levene)
+# H0: As variâncias são iguais entre os grupos. 
+# Queremos p > 0.05
+leveneTest(tempo ~ tipo_soluto * temperatura, data = df)
 ```
+Como nosso teste Shapiro para testar a normalidade do resíduos deu Pr(>F) = 0.03986 que é menor que 0.05, os resíduos não são normalmente distribuídos
 
-A ANOVA nos diz se existe diferença, mas não onde. O teste de Tukey compara todos os pares de grupos (24° vs 40°, 24° vs 60°, etc.) para ver quais são especificamente diferentes entre si.
+O que isso significa? Seus resíduos não serem normais significa que o seu modelo de ANOVA padrão (`aov()`) não é tecnicamente válido. Os p-valores que ele gera (como aquele $p=0.9749$ da interação) não são 100% confiáveis. A causa mais provável? Dados de "tempo" quase nunca são normais. Eles costumam ser "assimétricos à direita". Olhando seus dados originais, eu aposto que aqueles valores altos (como `59.45` e `58.61` no Sal@24, ou o `51.89` no Sal@40) são os culpados. Eles são *outliers* que estão "puxando" a média e quebrando a bela curva de sino que a normalidade exige
 
+A Solução: Transformação de Dados Calma. Isso é extremamente comum e fácil de resolver. A solução padrão para dados de tempo (que são assimétricos e positivos) é aplicar uma **transformação logarítmica**. Você vai rodar a ANOVA não no `tempo`, mas no `log(tempo)`. Isso "comprime" os valores muito altos e "expande" os muito baixos, fazendo com que os resíduos se comportem muito melhor e (provavelmente) passem no teste de Shapiro-Wilk. 
 ```{r}
-# Rodar o Teste de Tukey para o açucar
-TukeyHSD(modelo_sal)
+# 1. Adicionar a coluna com o tempo transformado
+df$tempo_log <- log(df$tempo)
 
-# Rodar o Teste de Tukey para o sal
-TukeyHSD(modelo_acucar)
+# 2. Rodar a NOVA ANOVA usando os dados de log
+# (Note a mudança de 'tempo' para 'tempo_log')
+modelo_log <- aov(tempo_log ~ tipo_soluto * temperatura, data = df)
+
+# 3. VERIFICAR AS PREMISSAS DO NOVO MODELO
+
+# a) Testar a nova normalidade (é o que queremos consertar)
+print("Novo Teste de Shapiro-Wilk (com log):")
+shapiro.test(residuals(modelo_log)) 
+# ^--- Você quer que este p-valor seja > 0.05 agora!
+
+# b) Re-testar a homogeneidade (só para garantir)
+library(car)
+print("Novo Teste de Levene (com log):")
+leveneTest(tempo_log ~ tipo_soluto * temperatura, data = df)
+# ^--- Você quer que este p-valor continue > 0.05
+
+# 4. SE AS PREMISSAS PASSAREM (ambos p > 0.05),
+#    olhe os resultados deste modelo.
+#    Estes são os resultados válidos.
+print("Resultados Finais da ANOVA (com log):")
+summary(modelo_log)
 ```
-Boxplot
+* **`Pr(>F)` da Temperatura: $6.82e-09$**
+    * **Resultado:** Altamente Significativo ($p < 0.05$).
+    * **Tradução:** A temperatura tem um efeito massivo e inegável.
 
-```{r}
-ggplot(dados, aes(x = temperatura, y = round(tempo, 1), fill = temperatura)) +
-  geom_boxplot() + 
-  geom_point(position = position_jitter(width = 0.1, height = 0), alpha = 0.7) +
-  facet_wrap(~ soluto, scales = "free_y") +
-  labs(
-    title = "Efeito da Temperatura na Dissolução de Sal e Açúcar",
-    subtitle = "Análise de Boxplot por Grupo",
-    x = "Temperatura (°C)",
-    y = "Tempo de Dissolução (s)"
-  ) +
-  theme_bw()
-```
+* **`Pr(>F)` do Tipo Soluto: $0.0111$**
+    * **Resultado:** Significativo ($p < 0.05$).
+    * **Tradução:** O tipo de soluto importa. Um deles é, em média, mais rápido ou mais lento que o outro.
 
+* **`Pr(>F)` da Interação (Soluto:Temperatura): $0.53$**
+    * **Resultado:** Não Significativo ($p > 0.05$).
+    * **Tradução:** A hipótese "iônico vs. molecular" não foi comprovada. O efeito da temperatura é o mesmo para ambos.
+
+---
+Conclusão
+
+#### Resumo da Análise Estatística
+
+Foi conduzida uma Análise de Variância (ANOVA) de duas vias para investigar os efeitos da **Temperatura** (24°C, 40°C, 60°C) e do **Tipo de Soluto** (Sal, Açúcar) sobre o tempo de dissolução.
+
+Os dados do tempo de dissolução foram transformados logaritmicamente (`log(tempo)`) para corrigir uma violação da premissa de normalidade (Shapiro-Wilk $p = 0.03$). O modelo transformado atendeu com sucesso às premissas de normalidade dos resíduos (Teste de Shapiro-Wilk, $p = 0.23$) e homogeneidade das variâncias (Teste de Levene, $p = 0.80$), validando os resultados da ANOVA.
+
+#### Interpretação dos Resultados
+
+A análise revelou o seguinte:
+
+1.  **Efeito da Temperatura:** Foi encontrado um efeito principal altamente significativo da temperatura ($p = 6.82e-09$). Isso confirma que, como esperado, o aumento da temperatura reduz drasticamente o tempo necessário para a dissolução.
+
+2.  **Efeito do Tipo de Soluto:** Foi encontrado um efeito principal significativo do tipo de soluto ($p = 0.011$). Isso indica que, independentemente da temperatura, existe uma diferença estatística no tempo médio de dissolução entre o Sal e o Açúcar.
+
+3.  **Efeito de Interação (A Hipótese Principal):** **Não foi encontrada** uma interação estatisticamente significativa entre o tipo de soluto e a temperatura ($p = 0.53$).
+
+#### Conclusão Científica
+
+A hipótese central do estudo — de que a natureza iônica (Sal) e molecular (Açúcar) dos solutos faria com que eles reagissem de forma diferente ao aumento da temperatura — **não foi confirmada pelos dados**.
+
+Embora os resultados mostrem claramente que a temperatura acelera a dissolução e que um soluto é, em média, diferente do outro, o *nível* de aceleração fornecido pelo calor é estatisticamente o mesmo para ambos. Em termos práticos, o "impulso" (boost) na velocidade de dissolução que se ganha ao aquecer a água é igual para o sal e para o açúcar.
